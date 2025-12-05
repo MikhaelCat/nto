@@ -14,7 +14,7 @@ __pycache__/
 .idea/
 
 # Project specific
-data/
+# data/
 !data/**/.gitkeep
 output/
 !output/**/.gitkeep

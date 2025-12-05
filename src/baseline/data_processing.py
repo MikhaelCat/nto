@@ -47,7 +47,10 @@ def load_and_merge_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.
         dtype={
             k: v
             for k, v in dtype_spec.items()
-            if k in [constants.COL_USER_ID, constants.COL_BOOK_ID, constants.COL_HAS_READ]
+            if k in [
+                constants.COL_USER_ID, 
+                constants.COL_BOOK_ID, 
+                constants.COL_HAS_READ]
         },
         parse_dates=[constants.COL_TIMESTAMP],
     )
@@ -80,7 +83,10 @@ def load_and_merge_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.
         dtype={
             k: v
             for k, v in dtype_spec.items()
-            if k in [constants.COL_USER_ID, constants.COL_GENDER, constants.COL_AGE]
+            if k in [
+                constants.COL_USER_ID, 
+                constants.COL_GENDER, 
+                constants.COL_AGE]
         },
     )
     book_data_df = pd.read_csv(
