@@ -15,7 +15,7 @@ __pycache__/
 
 # Project specific
 # data/
-!data/**/.gitkeep
+# !data/**/.gitkeep
 output/
 !output/**/.gitkeep
 
