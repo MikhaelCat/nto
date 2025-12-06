@@ -1,18 +1,38 @@
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from typing import Dict, List
+import re
 import joblib
 import os
 from pathlib import Path
-import re
+from typing import Dict, List, Tuple, Optional
+
+# ML и NLP зависимости
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from transformers import AutoTokenizer, AutoModel
 import torch
-from torch.nn.functional import cosine_similarity
-from .config import Config
-from .constants import *
+
+# Константы — ОБЯЗАТЕЛЬНО подключите их!
+from src.baseline.constants import (
+    USER_ID,
+    BOOK_ID,
+    HAS_READ,
+    RATING,
+    TIMESTAMP,
+    AUTHOR_ID,
+    DESCRIPTION,
+    READ_CLASS,
+    PLANNED_CLASS,
+    COLD_CLASS
+)
+
+# Конфигурация
+from src.baseline.config import Config
+from .constants import (
+    USER_ID, BOOK_ID, HAS_READ, RATING, TIMESTAMP,
+    AUTHOR_ID, DESCRIPTION, READ_CLASS, PLANNED_CLASS, COLD_CLASS
+)
 
 class TwoTowersFeatureEngineer:
     def __init__(self, config: Config):
@@ -116,7 +136,7 @@ class TwoTowersFeatureEngineer:
     def create_user_features(self, train_df: pd.DataFrame, users_df: pd.DataFrame) -> pd.DataFrame:
         """Create comprehensive user features for the user tower."""
         print("Creating user features...")
-        
+
         user_features = users_df.set_index(USER_ID).copy()
         
         # Temporal features from interactions
