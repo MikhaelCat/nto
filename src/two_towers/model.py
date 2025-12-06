@@ -2,7 +2,7 @@
 import torch
 from torch import nn
 
-from ..baseline import config
+from .config import config
 
 class Two_towers(nn.Module):
     def __init__(self, user_features_in:int, book_features_in:int):
