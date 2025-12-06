@@ -65,3 +65,16 @@ PREDICTION_MIN_VALUE = 0
 PREDICTION_MAX_VALUE = 2  # Changed: now 3 classes (0, 1, 2) instead of regression
 MAX_RANKING_LENGTH = 20
 
+# Column names
+USER_ID = 'user_id'
+BOOK_ID = 'book_id'
+HAS_READ = 'has_read'
+RATING = 'rating'
+TIMESTAMP = 'timestamp'
+AUTHOR_ID = 'author_id'
+DESCRIPTION = 'description'
+
+# Target classes
+READ_CLASS = 2      # has_read = 1 → прочитана
+PLANNED_CLASS = 1   # has_read = 0 → в планах
+COLD_CLASS = 0      # холодный кандидат
