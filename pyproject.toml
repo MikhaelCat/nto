@@ -21,10 +21,10 @@ build-backend = "poetry.core.masonry.api"
 python = ">=3.10,<3.15"
 pandas = "^2.3.3"
 torch = "^2.9.1"
-lightgbm = "^4.6.0"
 scikit-learn = "^1.7.2"
 tqdm = "^4.67.1"
 transformers = "^4.57.3"
+lightgbm = "^4.6.0"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.14.3"

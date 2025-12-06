@@ -17,7 +17,7 @@ from . import config, constants
 from .evaluate import dcg_at_k, ndcg_at_k
 from .features import add_aggregate_features, handle_missing_values
 from .temporal_split import get_split_date_from_ratio, temporal_split_by_date
-
+from ..two_towers.model import Two_towers
 
 def train() -> None:
     """Runs the model training pipeline with temporal split.
@@ -144,43 +144,51 @@ def train() -> None:
     # Train model
     print("\nTraining LightGBM model (multiclass classification: 3 classes)...")
     print("  Classes: 0=cold candidates, 1=planned books, 2=read books")
-    model = lgb.LGBMClassifier(**config.LGB_PARAMS)
 
-    # Create callback for saving checkpoints every 50 iterations
-    def checkpoint_callback(env: lgb.callback.CallbackEnv) -> None:
-        """Save model checkpoint every 50 iterations."""
-        iteration = env.iteration
-        if iteration > 0 and iteration % 50 == 0:
-            checkpoint_path = checkpoint_dir / f"checkpoint_iter_{iteration}.txt"
-            # env.model is the Booster object during training
-            env.model.save_model(str(checkpoint_path))
-            print(f"  Checkpoint saved at iteration {iteration}: {checkpoint_path}")
 
-    # Update fit params with early stopping callback
-    fit_params = config.LGB_FIT_PARAMS.copy()
-    fit_params["callbacks"] = [
-        lgb.early_stopping(
-            stopping_rounds=config.EARLY_STOPPING_ROUNDS,
-            verbose=True,
-        ),
-        lgb.log_evaluation(period=1),
-        checkpoint_callback,
-    ]
 
-    # Explicitly specify categorical features to avoid LightGBM hanging
-    # Convert categorical feature names to column indices
-    categorical_feature_indices = [
-        features.index(f) for f in categorical_features if f in features
-    ]
+    model = Two_towers()
+    # model = lgb.LGBMClassifier(**config.LGB_PARAMS)
 
-    model.fit(
-        X_train,
-        y_train,
-        eval_set=[(X_val, y_val)],
-        eval_metric=fit_params["eval_metric"],
-        callbacks=fit_params["callbacks"],
-        categorical_feature=categorical_feature_indices if categorical_feature_indices else "auto",
-    )
+    # # Create callback for saving checkpoints every 50 iterations
+    # def checkpoint_callback(env: lgb.callback.CallbackEnv) -> None:
+    #     """Save model checkpoint every 50 iterations."""
+    #     iteration = env.iteration
+    #     if iteration > 0 and iteration % 50 == 0:
+    #         checkpoint_path = checkpoint_dir / f"checkpoint_iter_{iteration}.txt"
+    #         # env.model is the Booster object during training
+    #         env.model.save_model(str(checkpoint_path))
+    #         print(f"  Checkpoint saved at iteration {iteration}: {checkpoint_path}")
+
+    # # Update fit params with early stopping callback
+    # fit_params = config.LGB_FIT_PARAMS.copy()
+    # fit_params["callbacks"] = [
+    #     lgb.early_stopping(
+    #         stopping_rounds=config.EARLY_STOPPING_ROUNDS,
+    #         verbose=True,
+    #     ),
+    #     lgb.log_evaluation(period=1),
+    #     checkpoint_callback,
+    # ]
+
+    # # Explicitly specify categorical features to avoid LightGBM hanging
+    # # Convert categorical feature names to column indices
+    # categorical_feature_indices = [
+    #     features.index(f) for f in categorical_features if f in features
+    # ]
+
+    # model.fit(
+    #     X_train,
+    #     y_train,
+    #     eval_set=[(X_val, y_val)],
+    #     eval_metric=fit_params["eval_metric"],
+    #     callbacks=fit_params["callbacks"],
+    #     categorical_feature=categorical_feature_indices if categorical_feature_indices else "auto",
+    # )
+
+    
+
+
 
     # Evaluate the model
     val_preds = model.predict(X_val)

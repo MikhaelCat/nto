@@ -88,13 +88,12 @@ LGB_PARAMS = {
     "max_bin": 255,  # Reduce from default 255 to use less memory (already optimal)
     "force_row_wise": True,  # Use row-wise data loading for better memory efficiency with large datasets
 }
+class TWO_TOWER_PARAMS:
+    usertower_embedding_lenght = 128
+    usertower_inner_lenght = 128
+    booktower_embedding_lenght = 128
+    booktower_inner_lenght = 128
 
-TWO_TOWERS_PARAMS = {
-    "usertower_embedding_lenght": 128,
-    "usertower_inner_lenght": 128,
-    "booktower_embedding_lenght": 128,
-    "booktower_inner_lenght": 128
-}
 
 
 

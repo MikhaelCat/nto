@@ -5,6 +5,9 @@ This script loads raw data, performs feature engineering (without aggregates),
 and saves the processed data to data/processed/ for use in training and prediction.
 """
 
+
+# TODO check for sort by time
+
 from . import config, constants
 from .data_processing import load_and_merge_data
 from .features import create_features
