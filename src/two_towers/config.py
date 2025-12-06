@@ -93,7 +93,8 @@ class TWO_TOWER_PARAMS:
     usertower_inner_lenght = 128
     booktower_embedding_lenght = 128
     booktower_inner_lenght = 128
-
+    mergelayer_inner = 128
+    mergelayer_out = 64
 
 
 
