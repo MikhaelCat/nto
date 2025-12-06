@@ -2,5 +2,5 @@
 
 from pandas import DataFrame
 
-def final() -> tuple[DataFrame, DataFrame]:
+def final() -> tuple[DataFrame, DataFrame, DataFrame, DataFrame]:
     ...
