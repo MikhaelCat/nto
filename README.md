@@ -95,16 +95,16 @@ data/raw/
 
 ```bash
 # 1. Подготовка данных (загрузка, фильтрация, feature engineering)
-poetry run python -m src.baseline.prepare_data
+poetry run python -m src.two_towers.prepare_data
 
 # 2. Обучение модели (использует подготовленные данные)
-poetry run python -m src.baseline.train
+poetry run python -m src.two_towers.train
 
 # 3. Предсказание (использует подготовленные данные и обученные модели)
-poetry run python -m src.baseline.predict
+poetry run python -m src.baseltwo_towers.line.predict
 
 # 4. Валидация submission
-poetry run python -m src.baseline.validate
+poetry run python -m src.basetwo_towers.line.validate
 ```
 
 Или через Makefile:

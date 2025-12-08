@@ -1,75 +1,112 @@
-
 import torch
 from torch import nn
+import torch.nn.functional as F
 
-import config
+from . import TWO_TOWER_PARAMS
 
-
-class Two_towers(nn.Module):
-    def __init__(self, user_features_in:int, book_features_in:int):
+class TwoTowersModel(nn.Module):
+    
+    def __init__(self, user_input_dim, book_input_dim):
         super().__init__()
-
-        self.user_tower = nn.Sequential(
-            nn.Linear(
-                in_features=user_features_in, 
-                out_features=config.TWO_TOWER_PARAMS.usertower_inner_lenght,
-            ),
-            nn.ReLU(),
-            nn.Linear(
-                in_features=config.TWO_TOWER_PARAMS.usertower_inner_lenght,
-                out_features=config.TWO_TOWER_PARAMS.usertower_embedding_lenght,
-            ),
-        )
-
-        self.book_tower = nn.Sequential(
-            nn.Linear(
-                in_features=book_features_in, 
-                out_features=config.TWO_TOWER_PARAMS.booktower_inner_lenght
-            ),
-            nn.ReLU(),
-            nn.Linear(
-                in_features=config.TWO_TOWER_PARAMS.booktower_inner_lenght, 
-                out_features=config.TWO_TOWER_PARAMS.booktower_embeddings_lenght
-            )
-        )
-
+        
+        # User Tower
+        user_layers = []
+        prev_dim = user_input_dim
+        for hidden_dim in TWO_TOWER_PARAMS.user_tower_hidden:
+            user_layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(TWO_TOWER_PARAMS.dropout_rate)
+            ])
+            prev_dim = hidden_dim
+        user_layers.append(nn.Linear(prev_dim, TWO_TOWER_PARAMS.user_embedding_dim))
+        self.user_tower = nn.Sequential(*user_layers)
+        
+        # Book Tower
+        book_layers = []
+        prev_dim = book_input_dim
+        for hidden_dim in TWO_TOWER_PARAMS.book_tower_hidden:
+            book_layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(TWO_TOWER_PARAMS.dropout_rate)
+            ])
+            prev_dim = hidden_dim
+        book_layers.append(nn.Linear(prev_dim, TWO_TOWER_PARAMS.book_embedding_dim))
+        self.book_tower = nn.Sequential(*book_layers)
+        
+        # Merge Network
         self.merge_net = nn.Sequential(
             nn.Linear(
-                in_features=config.TWO_TOWER_PARAMS.usertower_embedding_lenght + config.TWO_TOWER_PARAMS.booktower_inner_lenght,
-                out_features=config.TWO_TOWER_PARAMS.mergelayer_inner
-                ),
-            nn.ReLU(),
-            nn.Linear(
-                in_features=config.TWO_TOWER_PARAMS.mergelayer_inner,
-                out_features=config.TWO_TOWER_PARAMS.mergelayer_out,
-            )     
-        )
-
-        self.final_layer = nn.Sequential(
-            nn.Linear(
-                in_features=config.TWO_TOWER_PARAMS.mergelayer_out + 1, # dot product
-                out_features=3
+                TWO_TOWER_PARAMS.user_embedding_dim + TWO_TOWER_PARAMS.book_embedding_dim,
+                TWO_TOWER_PARAMS.merge_hidden
             ),
-            nn.Softmax(dim=1)
+            nn.BatchNorm1d(TWO_TOWER_PARAMS.merge_hidden),
+            nn.ReLU(),
+            nn.Dropout(TWO_TOWER_PARAMS.dropout_rate),
+            nn.Linear(TWO_TOWER_PARAMS.merge_hidden, TWO_TOWER_PARAMS.merge_output),
+            nn.BatchNorm1d(TWO_TOWER_PARAMS.merge_output),
+            nn.ReLU()
         )
+        
+        # Classification Head
+        self.classifier = nn.Sequential(
+            nn.Linear(
+                TWO_TOWER_PARAMS.merge_output + 1,  # +1 для dot product
+                TWO_TOWER_PARAMS.classifier_hidden
+            ),
+            nn.ReLU(),
+            nn.Dropout(TWO_TOWER_PARAMS.dropout_rate),
+            nn.Linear(TWO_TOWER_PARAMS.classifier_hidden, TWO_TOWER_PARAMS.num_classes)
+        )
+        
+        # Инициализация весов
+        self._init_weights()
+    
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.kaiming_normal_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+    
+    def forward(self, user_features, book_features):
+        # Проход через башни
+        user_emb = self.user_tower(user_features)
+        book_emb = self.book_tower(book_features)
+        
+        # Нормализация эмбеддингов
+        user_emb = F.normalize(user_emb, p=2, dim=1)
+        book_emb = F.normalize(book_emb, p=2, dim=1)
+        
+        # Скалярное произведение (сходство)
+        dot_product = torch.sum(user_emb * book_emb, dim=1, keepdim=True)
+        
+        # Объединение эмбеддингов
+        merged = torch.cat([user_emb, book_emb], dim=1)
+        merged = self.merge_net(merged)
+        
+        # Финальная классификация
+        combined = torch.cat([merged, dot_product], dim=1)
+        logits = self.classifier(combined)
+        
+        return logits
+    
+    def predict_proba(self, user_features, book_features):
+        """Предсказание вероятностей классов"""
+        with torch.no_grad():
+            logits = self.forward(user_features, book_features)
+            return F.softmax(logits, dim=1)
+    
+    def get_embeddings(self, user_features, book_features):
+        """Получение эмбеддингов для анализа"""
+        with torch.no_grad():
+            user_emb = self.user_tower(user_features)
+            book_emb = self.book_tower(book_features)
+            return user_emb, book_emb
 
 
-    def forward(self, user, book):
-
-        user_emb = self.user_tower(user)
-        user_emb = nn.functional.normalize(user_emb)
-
-        book_emb = self.book_tower(book)
-        book_emb = nn.functional.normalize(book_emb)
-
-        dot_prod = torch.sum(book_emb * user_emb, dim=1)
-
-        merge_res = self.merge_net(torch.cat(book_emb, user_emb, dim=1)) # NOT SURE IF IT SHOULD BE dim=1
-
-        final_res = self.final_layer(torch.cat(merge_res, dot_prod, dim=1))
-
-        return final_res
-
-
-
-
+# Для обратной совместимости
+Two_towers = TwoTowersModel

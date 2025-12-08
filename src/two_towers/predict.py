@@ -1,321 +1,229 @@
-"""
-Inference script to generate predictions for the test set.
-
-Computes aggregate features on all train data and applies them to test set,
-then generates predictions using the trained model and ranks candidates for each user.
-"""
-
-import numpy as np
-
-import lightgbm as lgb
+import torch
 import pandas as pd
+import numpy as np
+from tqdm import tqdm
+import warnings
+warnings.filterwarnings('ignore')
 
-from . import config, constants
-from .data_processing import expand_candidates, load_and_merge_data
-from .features import add_aggregate_features, handle_missing_values
+from .model import TwoTowersModel
+from .features import TwoTowersFeatureEngineer
+from .config import Config, TWO_TOWER_PARAMS
+from . import constants
+from .data_processing import load_and_merge_data, expand_candidates
 
 
-def predict() -> None:
-    """Generates and saves ranked predictions for the test set.
+class TwoTowersPredictor:
+    def __init__(self, model_path=None):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = None
+        self.engineer = None
+        self.user_features = None
+        self.book_features = None
+        self.text_features = None
+        
+        if model_path:
+            self.load_model(model_path)
+    
+    def load_model(self, model_path):
+        print(f"Loading model from {model_path}...")
+        
+        checkpoint = torch.load(model_path, map_location=self.device)
+        
+        config = checkpoint['config']
+        TWO_TOWER_PARAMS.user_input_dim = config['user_input_dim']
+        TWO_TOWER_PARAMS.book_input_dim = config['book_input_dim']
+        
+        self.model = TwoTowersModel(
+            TWO_TOWER_PARAMS.user_input_dim,
+            TWO_TOWER_PARAMS.book_input_dim
+        ).to(self.device)
+        
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.eval()
+        
+        print(f"Model loaded. Best NDCG: {checkpoint['best_ndcg']:.4f}")
+    
+    def prepare_features(self, data_dict):
+        if self.engineer is None:
+            self.engineer = TwoTowersFeatureEngineer(Config)
+            self.engineer.create_all_features(data_dict)
+            
+            self.user_features = self.engineer.user_features
+            self.book_features = self.engineer.book_features
+            self.text_features = self.engineer.text_features
+            
+            print(f"User features shape: {self.user_features.shape}")
+            print(f"Book features shape: {self.book_features.shape}")
+            if self.text_features is not None:
+                print(f"Text features shape: {self.text_features.shape}")
+    
+    def predict_batch(self, user_ids, book_ids):
+        if self.model is None:
+            raise ValueError("Model not loaded")
+        
+        user_id_to_idx = {uid: idx for idx, uid in enumerate(self.user_features.index)}
+        book_id_to_idx = {bid: idx for idx, bid in enumerate(self.book_features.index)}
+        
+        user_indices = [user_id_to_idx[uid] for uid in user_ids if uid in user_id_to_idx]
+        book_indices = [book_id_to_idx[bid] for bid in book_ids if bid in book_id_to_idx]
+        
+        if len(user_indices) == 0 or len(book_indices) == 0:
+            return np.array([])
+        
+        user_features_tensor = torch.FloatTensor(self.user_features.values[user_indices])
+        book_features_tensor = torch.FloatTensor(self.book_features.values[book_indices])
+        
+        if self.text_features is not None:
+            text_features_tensor = torch.FloatTensor(self.text_features.values[book_indices])
+            book_features_tensor = torch.cat([book_features_tensor, text_features_tensor], dim=1)
+        
+        # Предсказание
+        with torch.no_grad():
+            user_features_tensor = user_features_tensor.to(self.device)
+            book_features_tensor = book_features_tensor.to(self.device)
+            
+            logits = self.model(user_features_tensor, book_features_tensor)
+            probs = torch.softmax(logits, dim=1).cpu().numpy()
+        
+        return probs
+    
+    def rank_candidates(self, user_id, candidate_books, k=20):
+        if len(candidate_books) == 0:
+            return []
+        
+        # Предсказание вероятностей
+        user_ids = [user_id] * len(candidate_books)
+        probs = self.predict_batch(user_ids, candidate_books)
+        
+        if len(probs) == 0:
+            return candidate_books[:k]
+        
+        scores = probs[:, 1] * 1.0 + probs[:, 2] * 2.0
+        
+        # по убыванию скора
+        sorted_indices = np.argsort(scores)[::-1]
+        ranked_books = [candidate_books[i] for i in sorted_indices]
+        
+        return ranked_books[:k]
+    
+    def apply_hierarchical_constraint(self, ranked_books, probs):
+        if len(ranked_books) == 0:
+            return ranked_books
+        
+        # предсказанные классы
+        pred_classes = np.argmax(probs, axis=1)
+        
+        # Группируем книги по классам
+        books_by_class = {0: [], 1: [], 2: []}
+        for book_id, cls in zip(ranked_books, pred_classes):
+            if book_id in books_by_class:
+                books_by_class[cls].append(book_id)
+        
+        reordered = []
+        for cls in [2, 1, 0]:  
+            reordered.extend(books_by_class[cls])
+        
+        return reordered
 
-    This script:
-    1. Loads targets.csv and candidates.csv
-    2. Expands candidates into (user_id, book_id) pairs
-    3. Computes aggregate features on all train data
-    4. Generates probabilities for 3 classes using the trained multiclass model
-       (class 0=cold, 1=planned, 2=read)
-    5. Calculates ranking score: p1*1 + p2*2 (weighted sum based on relevance)
-    6. Ranks candidates for each user and selects top-K (K = min(20, num_candidates))
-    7. Saves submission.csv in format: user_id,book_id_list
 
-    Note: Data must be prepared first using prepare_data.py, and model must be trained
-    using train.py
-    """
-    # Load targets and candidates
-    print("Loading targets and candidates...")
-    targets_df = pd.read_csv(
-        config.RAW_DATA_DIR / constants.TARGETS_FILENAME,
-        dtype={constants.COL_USER_ID: "int32"},
-    )
-    candidates_df = pd.read_csv(
-        config.RAW_DATA_DIR / constants.CANDIDATES_FILENAME,
-        dtype={constants.COL_USER_ID: "int32"},
-    )
-
-    print(f"Targets: {len(targets_df):,} users")
-    print(f"Candidates: {len(candidates_df):,} users")
-
-    # Expand candidates into pairs
-    print("\nExpanding candidates...")
-    candidates_pairs_df = expand_candidates(candidates_df)
-
-    # Load prepared data for base features
-    processed_path = config.PROCESSED_DATA_DIR / constants.PROCESSED_DATA_FILENAME
-    if not processed_path.exists():
-        raise FileNotFoundError(
-            f"Processed data not found at {processed_path}. "
-            "Please run 'poetry run python -m src.baseline.prepare_data' first."
-        )
-
-    print(f"Loading prepared data from {processed_path}...")
-    featured_df = pd.read_parquet(processed_path, engine="pyarrow")
-
-    # Get train data for computing aggregates
-    train_df = featured_df[featured_df[constants.COL_SOURCE] == constants.VAL_SOURCE_TRAIN].copy()
-
-    # Load metadata for candidates
-    print("Loading metadata...")
-    _, _, _, book_genres_df, descriptions_df = load_and_merge_data()
-    # We need users and books data separately
-    user_data_df = pd.read_csv(config.RAW_DATA_DIR / constants.USER_DATA_FILENAME)
-    book_data_df = pd.read_csv(config.RAW_DATA_DIR / constants.BOOK_DATA_FILENAME)
-
-    # Merge metadata with candidates
-    print("Merging metadata with candidates...")
-    candidates_with_meta = candidates_pairs_df.merge(user_data_df, on=constants.COL_USER_ID, how="left")
-    book_data_df = book_data_df.drop_duplicates(subset=[constants.COL_BOOK_ID])
-    candidates_with_meta = candidates_with_meta.merge(book_data_df, on=constants.COL_BOOK_ID, how="left")
-
-    # Add base features from prepared data (genres, text features)
-    # We'll match by book_id to get TF-IDF and BERT features
-    book_features = featured_df[[constants.COL_BOOK_ID]].drop_duplicates()
-    # Get all feature columns except metadata and source columns
-    feature_cols = [
-        col
-        for col in featured_df.columns
-        if col
-        not in [
-            constants.COL_USER_ID,
-            constants.COL_BOOK_ID,
-            constants.COL_SOURCE,
-            constants.COL_TIMESTAMP,
-            constants.COL_HAS_READ,
-            constants.COL_TARGET,
-            constants.COL_PREDICTION,
-            constants.COL_GENDER,
-            constants.COL_AGE,
-            constants.COL_AUTHOR_ID,
-            constants.COL_PUBLICATION_YEAR,
-            constants.COL_LANGUAGE,
-            constants.COL_PUBLISHER,
-            constants.COL_AVG_RATING,
-        ]
-        and not col.startswith("tfidf_")
-        and not col.startswith("bert_")
-    ]
-
-    # Add genre count and text features
-    # Get a representative row for each book (just take first occurrence)
-    book_features_df = featured_df[[constants.COL_BOOK_ID] + feature_cols].drop_duplicates(
-        subset=[constants.COL_BOOK_ID]
-    )
-
-    # Merge book features - drop duplicate columns before merge
-    # Remove columns that will be merged from candidates_with_meta if they exist
-    cols_to_drop = [col for col in feature_cols if col in candidates_with_meta.columns]
-    if cols_to_drop:
-        candidates_with_meta = candidates_with_meta.drop(columns=cols_to_drop)
-
-    candidates_with_meta = candidates_with_meta.merge(
-        book_features_df, on=constants.COL_BOOK_ID, how="left"
-    )
-
-    # Get TF-IDF and BERT features from prepared data
-    tfidf_cols = [col for col in featured_df.columns if col.startswith("tfidf_")]
-    bert_cols = [col for col in featured_df.columns if col.startswith("bert_")]
-    text_feature_cols = tfidf_cols + bert_cols
-
-    if text_feature_cols:
-        book_text_features = featured_df[[constants.COL_BOOK_ID] + text_feature_cols].drop_duplicates(
-            subset=[constants.COL_BOOK_ID]
-        )
-        candidates_with_meta = candidates_with_meta.merge(
-            book_text_features, on=constants.COL_BOOK_ID, how="left"
-        )
-
-    # Compute aggregate features on ALL train data
-    print("\nComputing aggregate features on all train data...")
-    candidates_with_agg = add_aggregate_features(candidates_with_meta.copy(), train_df)
-
-    # Handle missing values
-    print("Handling missing values...")
-    candidates_final = handle_missing_values(candidates_with_agg, train_df)
-
-    # Load feature list saved during training
-    import json
-    features_path = config.MODEL_DIR / "features_list.json"
-    if features_path.exists():
-        print("Loading feature list from training...")
-        with open(features_path, "r") as f:
-            features = json.load(f)
-        print(f"Loaded {len(features)} features from training")
-    else:
-        # Fallback: use same logic as training
-        print("Warning: Feature list not found, using fallback logic")
-        exclude_cols = [
-            constants.COL_SOURCE,
-            config.TARGET,
-            constants.COL_PREDICTION,
-            constants.COL_TIMESTAMP,
-        ]
-        train_features = [col for col in train_df.columns if col not in exclude_cols]
-        train_non_feature_object_cols = train_df[train_features].select_dtypes(include=["object"]).columns.tolist()
-        features = [f for f in train_features if f not in train_non_feature_object_cols]
-
-    # Remove any columns that shouldn't be features (like title, author_name, etc.)
-    exclude_cols = [
-        constants.COL_SOURCE,
-        config.TARGET,
-        constants.COL_PREDICTION,
-        constants.COL_TIMESTAMP,
-        constants.COL_USER_ID,
-        constants.COL_BOOK_ID,
-    ]
-    candidates_final = candidates_final.drop(
-        columns=[col for col in candidates_final.columns if col not in features and col not in exclude_cols + [constants.COL_USER_ID, constants.COL_BOOK_ID]],
-        errors="ignore"
-    )
-
-    # Add missing features with default values
-    missing_features = [f for f in features if f not in candidates_final.columns]
-    if missing_features:
-        print(f"Warning: Missing {len(missing_features)} features in candidates, adding defaults")
-        for feat in missing_features:
-            if feat in train_df.columns:
-                if train_df[feat].dtype.name == "category":
-                    default_val = train_df[feat].cat.categories[0] if len(train_df[feat].cat.categories) > 0 else 0
-                    candidates_final[feat] = pd.Categorical([default_val] * len(candidates_final), categories=train_df[feat].cat.categories, ordered=False)
-                else:
-                    candidates_final[feat] = train_df[feat].iloc[0] if len(train_df) > 0 else 0
-            else:
-                candidates_final[feat] = 0
-
-    # Ensure all features exist in candidates_final (add missing ones)
-    # features list is from training, so we need all of them
-    for feat in features:
-        if feat not in candidates_final.columns:
-            # Add with default value
-            if feat in train_df.columns:
-                if train_df[feat].dtype.name == "category":
-                    default_val = train_df[feat].cat.categories[0] if len(train_df[feat].cat.categories) > 0 else 0
-                    candidates_final[feat] = pd.Categorical([default_val] * len(candidates_final), categories=train_df[feat].cat.categories, ordered=False)
-                else:
-                    candidates_final[feat] = train_df[feat].iloc[0] if len(train_df) > 0 else 0
-            else:
-                candidates_final[feat] = 0
-
-    # Final check: ensure we have all features in the exact order
-    features = [f for f in features if f in candidates_final.columns]
-
-    # Convert categorical columns to pandas 'category' dtype for LightGBM (same as in train.py)
-    # Use categories from featured_df (processed data) to ensure they match training data
-    # This is critical: LightGBM requires exact match of categorical features
-    # Only process columns that were actually categorical in training data
-    for col in features:
-        if col in featured_df.columns and featured_df[col].dtype.name == "category":
-            # Get categories from processed training data
-            train_categories = list(featured_df[col].cat.categories)
-
-            # Convert to string first to handle any type mismatches
-            candidates_final[col] = candidates_final[col].astype(str)
-
-            # Replace any values not in train categories with first train category
-            valid_mask = candidates_final[col].isin([str(cat) for cat in train_categories])
-            if not valid_mask.all():
-                invalid_count = (~valid_mask).sum()
-                print(f"Warning: {invalid_count} values in {col} not in training categories, replacing with first category")
-                candidates_final.loc[~valid_mask, col] = str(train_categories[0]) if len(train_categories) > 0 else "0"
-
-            # Convert categories back to original type and create categorical
-            # Convert train_categories to same type as in training
-            train_cat_values = [str(cat) for cat in train_categories]
-            candidates_final[col] = pd.Categorical(candidates_final[col], categories=train_cat_values, ordered=False)
-
-            # Convert categorical codes back to original type if needed
-            # This ensures the internal representation matches training
-            if len(train_categories) > 0:
-                # Re-map to original category values
-                candidates_final[col] = candidates_final[col].astype(str).map(
-                    {str(cat): cat for cat in train_categories}
-                ).fillna(train_categories[0])
-                candidates_final[col] = pd.Categorical(candidates_final[col], categories=train_categories, ordered=False)
-
-    X_test = candidates_final[features]
-    print(f"Prediction features: {len(features)}")
-
-    # Load trained model
-    model_path = config.MODEL_DIR / config.MODEL_FILENAME
+def predict():
+    print("=" * 60)
+    print("GENERATING PREDICTIONS WITH TWO-TOWERS MODEL")
+    print("=" * 60)
+    
+    # Загрузка модели
+    model_path = Config.MODEL_DIR / Config.MODEL_FILENAME
     if not model_path.exists():
         raise FileNotFoundError(
-            f"Model not found at {model_path}. " "Please run 'poetry run python -m src.baseline.train' first."
+            f"Model not found at {model_path}. Please train the model first."
         )
-
-    print(f"\nLoading model from {model_path}...")
-    # Load Booster directly
-    model = lgb.Booster(model_file=str(model_path))
-
-    # Generate probabilities for multiclass (3 classes)
-    # For multiclass, Booster.predict() returns probabilities for all classes
-    # Shape: (n_samples, 3) with [p0, p1, p2] for each sample
-    # p0 = probability of class 0 (cold candidates)
-    # p1 = probability of class 1 (planned books)
-    # p2 = probability of class 2 (read books)
-    print("Generating predictions...")
-    test_proba_all = model.predict(X_test)  # Returns probabilities for all classes
-    # Convert to numpy array if needed and ensure it's 2D array: (n_samples, 3)
-    test_proba_all = np.array(test_proba_all)
-    if test_proba_all.ndim == 1:
-        # If it's 1D, reshape to (n_samples, 3)
-        test_proba_all = test_proba_all.reshape(-1, 3)
-
-    # Calculate ranking score: weighted sum of probabilities
-    # ranking_score = p0*0 + p1*1 + p2*2 = p1 + 2*p2
-    # Higher score = higher relevance (read books > planned books > cold candidates)
-    test_proba = test_proba_all[:, 1] * 1.0 + test_proba_all[:, 2] * 2.0
-
-    # Add predictions to candidates dataframe
-    candidates_final["prediction"] = test_proba
-
-    # Rank candidates for each user and select top-K
-    print("\nRanking candidates for each user...")
+    
+    predictor = TwoTowersPredictor(model_path)
+    
+    # Загрузка данных
+    print("\nLoading data...")
+    data = load_and_merge_data()
+    
+    # Загрузка targets и candidates
+    targets_df = pd.read_csv(
+        Config.RAW_DATA_DIR / constants.TARGETS_FILENAME,
+        dtype={constants.COL_USER_ID: "int32"}
+    )
+    
+    candidates_df = pd.read_csv(
+        Config.RAW_DATA_DIR / constants.CANDIDATES_FILENAME,
+        dtype={constants.COL_USER_ID: "int32"}
+    )
+    
+    print(f"Targets: {len(targets_df):,} users")
+    print(f"Candidates: {len(candidates_df):,} users")
+    
+    # Подготовка признаков
+    print("\nPreparing features...")
+    predictor.prepare_features(data)
+    
+    # Предсказания для каждого пользователя
+    print("\nGenerating predictions...")
     submission_rows = []
-
-    for user_id in targets_df[constants.COL_USER_ID]:
-        user_candidates = candidates_final[candidates_final[constants.COL_USER_ID] == user_id].copy()
-
+    
+    for user_id in tqdm(targets_df[constants.COL_USER_ID], desc="Processing users"):
+        user_candidates = candidates_df[
+            candidates_df[constants.COL_USER_ID] == user_id
+        ]
+        
         if len(user_candidates) == 0:
-            # No candidates for this user - empty list
-            book_id_list = ""
-        else:
-            # Sort by prediction probability (descending)
-            user_candidates = user_candidates.sort_values("prediction", ascending=False)
-
-            # Select top-K, where K = min(20, num_candidates)
-            k = min(constants.MAX_RANKING_LENGTH, len(user_candidates))
-            top_books = user_candidates.head(k)
-
-            # Create comma-separated string of book_ids
-            book_id_list = ",".join([str(int(book_id)) for book_id in top_books[constants.COL_BOOK_ID]])
-
-        submission_rows.append({constants.COL_USER_ID: user_id, constants.COL_BOOK_ID_LIST: book_id_list})
-
-    # Create submission DataFrame
+            submission_rows.append({
+                constants.COL_USER_ID: user_id,
+                constants.COL_BOOK_ID_LIST: ""
+            })
+            continue
+        
+        # Разбираем список кандидатов
+        candidate_list = user_candidates.iloc[0]['book_id_list']
+        candidate_books = [int(bid) for bid in str(candidate_list).split(',') if bid.strip()]
+        
+        # Ранжируем кандидатов
+        ranked_books = predictor.rank_candidates(
+            user_id, candidate_books, constants.MAX_RANKING_LENGTH
+        )
+        
+        if len(ranked_books) > 0:
+            user_ids = [user_id] * len(ranked_books)
+            probs = predictor.predict_batch(user_ids, ranked_books)
+            if len(probs) > 0:
+                ranked_books = predictor.apply_hierarchical_constraint(ranked_books, probs)
+        
+        book_id_list = ",".join(str(book_id) for book_id in ranked_books)
+        submission_rows.append({
+            constants.COL_USER_ID: user_id,
+            constants.COL_BOOK_ID_LIST: book_id_list
+        })
+    
+    # Создаем submission DataFrame
     submission_df = pd.DataFrame(submission_rows)
-
-    # Ensure submission directory exists
-    config.SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
-    submission_path = config.SUBMISSION_DIR / constants.SUBMISSION_FILENAME
-
-    # Save submission
+    
+    # Сохраняем
+    Config.SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
+    submission_path = Config.SUBMISSION_DIR / "submission_two_towers.csv"
     submission_df.to_csv(submission_path, index=False)
-    print(f"\nSubmission file created at: {submission_path}")
+    
+    print(f"\n{'='*60}")
+    print("PREDICTIONS COMPLETE")
+    print(f"Submission saved to: {submission_path}")
     print(f"Submission shape: {submission_df.shape}")
-
-    # Print statistics
+    
+    # Статистика
     non_empty = submission_df[submission_df[constants.COL_BOOK_ID_LIST] != ""].shape[0]
+    avg_books = submission_df[constants.COL_BOOK_ID_LIST].apply(
+        lambda x: len(x.split(',')) if x else 0
+    ).mean()
+    
     print(f"Users with recommendations: {non_empty}/{len(submission_df)}")
+    print(f"Average books per user: {avg_books:.1f}")
+    print(f"{'='*60}")
+    
+    return submission_df
 
 
 if __name__ == "__main__":
-    predict()
-
+    submission = predict()

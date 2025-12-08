@@ -3,13 +3,7 @@ Configuration file for the NTO ML competition baseline.
 """
 
 from pathlib import Path
-
-try:
-    import torch
-except ImportError:
-    torch = None
-
-from . import constants
+import torch
 
 # --- DIRECTORIES ---
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -21,53 +15,45 @@ OUTPUT_DIR = ROOT_DIR / "output"
 MODEL_DIR = OUTPUT_DIR / "models"
 SUBMISSION_DIR = OUTPUT_DIR / "submissions"
 
-
 # --- PARAMETERS ---
-N_SPLITS = 5  # Deprecated: kept for backwards compatibility, not used in temporal split
 RANDOM_STATE = 42
-TARGET = constants.COL_RELEVANCE  # Multiclass target: 0=cold, 1=planned, 2=read
 
 # --- TEMPORAL SPLIT CONFIG ---
-# Ratio of data to use for training (0 < TEMPORAL_SPLIT_RATIO < 1)
-# 0.8 means 80% of data points (by timestamp) go to train, 20% to validation
 TEMPORAL_SPLIT_RATIO = 0.8
 
 # --- TRAINING CONFIG ---
 EARLY_STOPPING_ROUNDS = 50
-MODEL_FILENAME_PATTERN = "lgb_fold_{fold}.txt"  # Deprecated: kept for backwards compatibility
-MODEL_FILENAME = "lgb_model.txt"  # Single model filename for temporal split
+MODEL_FILENAME = "two_towers_model.pth"
 
-# --- TF-IDF PARAMETERS ---
-TFIDF_MAX_FEATURES = 500
-TFIDF_MIN_DF = 2
-TFIDF_MAX_DF = 0.95
-TFIDF_NGRAM_RANGE = (1, 2)
+# --- TWO-TOWERS MODEL CONFIG ---
+class TWO_TOWER_PARAMS:
+    # Размерности входов (будут вычислены автоматически)
+    user_input_dim = None  # Будет вычислено
+    book_input_dim = None  # Будет вычислено
+    
+    # Архитектура башен
+    user_tower_hidden = [256, 128]
+    book_tower_hidden = [256, 128]
+    
+    # Размерности эмбеддингов
+    user_embedding_dim = 64
+    book_embedding_dim = 64
+    
+    # Объединяющий слой
+    merge_hidden = 128
+    merge_output = 64
+    
+    # Финальный классификатор
+    classifier_hidden = 64
+    num_classes = 3  # 0: cold, 1: planned, 2: read
+    
+    # Обучение
+    learning_rate = 0.001
+    batch_size = 256
+    num_epochs = 20
+    dropout_rate = 0.3
 
-# --- BERT PARAMETERS ---
-BERT_MODEL_NAME = constants.BERT_MODEL_NAME
-BERT_BATCH_SIZE = 8
-BERT_MAX_LENGTH = 512
-BERT_EMBEDDING_DIM = 768
-BERT_DEVICE = "cuda" if torch and torch.cuda.is_available() else "cpu"
-# Limit GPU memory usage to prevent overheating and OOM errors
-BERT_GPU_MEMORY_FRACTION = 0.75
-
-
-# --- FEATURES ---
-CAT_FEATURES = [
-    constants.COL_USER_ID,
-    constants.COL_BOOK_ID,
-    constants.COL_GENDER,
-    constants.COL_AGE,
-    constants.COL_AUTHOR_ID,
-    constants.COL_PUBLICATION_YEAR,
-    constants.COL_LANGUAGE,
-    constants.COL_PUBLISHER,
-]
-
-# --- MODEL PARAMETERS ---
-# Changed for Stage 2B: multiclass classification (3 classes) instead of binary
-# Classes: 0=cold candidates, 1=planned books, 2=read books
+# --- LIGHTGBM CONFIG (для сравнения) ---
 LGB_PARAMS = {
     "objective": "multiclass",
     "num_class": 3,
@@ -84,24 +70,50 @@ LGB_PARAMS = {
     "n_jobs": -1,
     "seed": RANDOM_STATE,
     "boosting_type": "gbdt",
-    # Memory optimization parameters to prevent hanging on large datasets
-    "max_bin": 255,  # Reduce from default 255 to use less memory (already optimal)
-    "force_row_wise": True,  # Use row-wise data loading for better memory efficiency with large datasets
-}
-class TWO_TOWER_PARAMS:
-    usertower_embedding_lenght = 128
-    usertower_inner_lenght = 128
-    booktower_embedding_lenght = 128
-    booktower_inner_lenght = 128
-    mergelayer_inner = 128
-    mergelayer_out = 64
-
-
-
-# LightGBM's fit method allows for a list of callbacks, including early stopping.
-# To use it, we need to specify parameters for the early stopping callback.
-LGB_FIT_PARAMS = {
-    "eval_metric": "multi_logloss",
-    "callbacks": [],  # Placeholder for early stopping callback
+    "max_bin": 255,
+    "force_row_wise": True,
 }
 
+# --- FEATURE ENGINEERING CONFIG ---
+TFIDF_MAX_FEATURES = 500
+BERT_EMBEDDING_DIM = 768
+USE_TEXT_FEATURES = True
+CACHE_FEATURES = True
+
+# --- PATHS FOR FEATURE ENGINEERING ---
+paths = {
+    'features': PROCESSED_DATA_DIR / 'features.pkl',
+    'text_features': PROCESSED_DATA_DIR / 'text_features.pkl',
+    'book_genres': RAW_DATA_DIR / 'book_genres.csv',
+    'descriptions': RAW_DATA_DIR / 'book_descriptions.csv'
+}
+
+# --- FEATURE ENGINEERING SETTINGS ---
+cache_features = True
+cache_embeddings = True
+use_gpu = torch and torch.cuda.is_available()
+
+
+class Config:
+    """Configuration class for easy access"""
+    ROOT_DIR = ROOT_DIR
+    DATA_DIR = DATA_DIR
+    RAW_DATA_DIR = RAW_DATA_DIR
+    INTERIM_DATA_DIR = INTERIM_DATA_DIR
+    PROCESSED_DATA_DIR = PROCESSED_DATA_DIR
+    OUTPUT_DIR = OUTPUT_DIR
+    MODEL_DIR = MODEL_DIR
+    SUBMISSION_DIR = SUBMISSION_DIR
+    RANDOM_STATE = RANDOM_STATE
+    TEMPORAL_SPLIT_RATIO = TEMPORAL_SPLIT_RATIO
+    EARLY_STOPPING_ROUNDS = EARLY_STOPPING_ROUNDS
+    MODEL_FILENAME = MODEL_FILENAME
+    TWO_TOWER_PARAMS = TWO_TOWER_PARAMS
+    TFIDF_MAX_FEATURES = TFIDF_MAX_FEATURES
+    BERT_EMBEDDING_DIM = BERT_EMBEDDING_DIM
+    USE_TEXT_FEATURES = USE_TEXT_FEATURES
+    CACHE_FEATURES = CACHE_FEATURES
+    paths = paths
+    cache_features = cache_features
+    cache_embeddings = cache_embeddings
+    use_gpu = use_gpu
