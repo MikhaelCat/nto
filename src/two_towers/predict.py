@@ -61,7 +61,7 @@ class TwoTowersPredictor:
     def predict_batch(self, user_ids, book_ids):
         if self.model is None:
             raise ValueError("Model not loaded")
-
+            #fix
         user_id_to_idx = {uid: idx for idx, uid in enumerate(self.user_features.index)}
         book_id_to_idx = {bid: idx for idx, bid in enumerate(self.book_features.index)}
 
