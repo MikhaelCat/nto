@@ -27,7 +27,7 @@ class TwoTowersPredictor:
     def load_model(self, model_path):
         print(f"Loading model from {model_path}...")
         
-        checkpoint = torch.load(model_path, map_location=self.device)
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         
         config = checkpoint['config']
         TWO_TOWER_PARAMS.user_input_dim = config['user_input_dim']
@@ -60,31 +60,44 @@ class TwoTowersPredictor:
     def predict_batch(self, user_ids, book_ids):
         if self.model is None:
             raise ValueError("Model not loaded")
-        
+
         user_id_to_idx = {uid: idx for idx, uid in enumerate(self.user_features.index)}
         book_id_to_idx = {bid: idx for idx, bid in enumerate(self.book_features.index)}
-        
+
         user_indices = [user_id_to_idx[uid] for uid in user_ids if uid in user_id_to_idx]
         book_indices = [book_id_to_idx[bid] for bid in book_ids if bid in book_id_to_idx]
-        
+
         if len(user_indices) == 0 or len(book_indices) == 0:
             return np.array([])
-        
-        user_features_tensor = torch.FloatTensor(self.user_features.values[user_indices])
-        book_features_tensor = torch.FloatTensor(self.book_features.values[book_indices])
-        
+
+    # --- ДОБАВЬТЕ ЭТОТ БЛОК ---
+    # Отбираем только числовые столбцы
+        user_features_numeric = self.user_features.select_dtypes(include=[np.number])
+        book_features_numeric = self.book_features.select_dtypes(include=[np.number])
+    
+    # Проверка размерности
+        if user_features_numeric.shape[1] == 0 or book_features_numeric.shape[1] == 0:
+            raise ValueError("No numeric features found!")
+    
+        print(f"Using {user_features_numeric.shape[1]} user features and {book_features_numeric.shape[1]} book features")
+    # --- КОНЕЦ БЛОКА ---
+
+    # Преобразуем данные в float (используем только числовые)
+        user_features_tensor = torch.FloatTensor(user_features_numeric.values[user_indices].astype(np.float32))
+        book_features_tensor = torch.FloatTensor(book_features_numeric.values[book_indices].astype(np.float32))
+
         if self.text_features is not None:
-            text_features_tensor = torch.FloatTensor(self.text_features.values[book_indices])
+            text_features_tensor = torch.FloatTensor(self.text_features.values[book_indices].astype(np.float32))
             book_features_tensor = torch.cat([book_features_tensor, text_features_tensor], dim=1)
-        
-        # Предсказание
+
+    # Предсказание
         with torch.no_grad():
             user_features_tensor = user_features_tensor.to(self.device)
             book_features_tensor = book_features_tensor.to(self.device)
-            
+    
             logits = self.model(user_features_tensor, book_features_tensor)
             probs = torch.softmax(logits, dim=1).cpu().numpy()
-        
+
         return probs
     
     def rank_candidates(self, user_id, candidate_books, k=20):

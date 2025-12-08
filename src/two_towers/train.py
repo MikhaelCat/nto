@@ -250,7 +250,7 @@ def train():
     print("=" * 60)
     
     # Загружаем лучшую модель для возврата
-    checkpoint = torch.load(Config.MODEL_DIR / Config.MODEL_FILENAME)
+    checkpoint = torch.load(Config.MODEL_DIR / Config.MODEL_FILENAME, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     
     return model, history
