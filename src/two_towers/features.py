@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -9,31 +8,52 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 # ML и NLP зависимости
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.decomposition import TruncatedSVD
-from transformers import AutoTokenizer, AutoModel
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.decomposition import TruncatedSVD
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    print("Warning: scikit-learn not installed. Some features will be disabled.")
+    TfidfVectorizer = None
+    TruncatedSVD = None
+    SKLEARN_AVAILABLE = False
+
+try:
+    from transformers import AutoTokenizer, AutoModel
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    print("Warning: transformers not installed. BERT features will be disabled.")
+    AutoTokenizer = None
+    AutoModel = None
+    TRANSFORMERS_AVAILABLE = False
+
 import torch
 
-# Константы — ОБЯЗАТЕЛЬНО подключите их!
-from src.baseline.constants import (
-    USER_ID,
-    BOOK_ID,
-    HAS_READ,
-    RATING,
-    TIMESTAMP,
-    AUTHOR_ID,
-    DESCRIPTION,
-    READ_CLASS,
-    PLANNED_CLASS,
-    COLD_CLASS
-)
+# Импорт локальных модулей - исправлены пути
+try:
+    from .constants import (
+        USER_ID, BOOK_ID, HAS_READ, RATING, TIMESTAMP,
+        AUTHOR_ID, DESCRIPTION, READ_CLASS, PLANNED_CLASS, COLD_CLASS
+    )
+except ImportError:
+    # Определяем константы по умолчанию, если импорт не работает
+    USER_ID = 'user_id'
+    BOOK_ID = 'book_id'
+    HAS_READ = 'has_read'
+    RATING = 'rating'
+    TIMESTAMP = 'timestamp'
+    AUTHOR_ID = 'author_id'
+    DESCRIPTION = 'description'
+    READ_CLASS = 2
+    PLANNED_CLASS = 1
+    COLD_CLASS = 0
 
-# Конфигурация
-from src.baseline.config import Config
-from .constants import (
-    USER_ID, BOOK_ID, HAS_READ, RATING, TIMESTAMP,
-    AUTHOR_ID, DESCRIPTION, READ_CLASS, PLANNED_CLASS, COLD_CLASS
-)
+# Конфигурация - используем локальный импорт
+try:
+    from .config import Config
+except ImportError:
+    Config = None
+    print("Warning: Config not found, using default configuration.")
 
 class TwoTowersFeatureEngineer:
     def __init__(self, config: Config):
