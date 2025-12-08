@@ -47,11 +47,12 @@ class TwoTowersPredictor:
         if self.engineer is None:
             self.engineer = TwoTowersFeatureEngineer(Config)
             self.engineer.create_all_features(data_dict)
-            
-            self.user_features = self.engineer.user_features
-            self.book_features = self.engineer.book_features
-            self.text_features = self.engineer.text_features
-            
+        
+        # Преобразуем строковые столбцы в числовые
+            self.user_features = self._convert_features_to_numeric(self.engineer.user_features)
+            self.book_features = self._convert_features_to_numeric(self.engineer.book_features)
+            self.text_features = self._convert_features_to_numeric(self.engineer.text_features) if self.engineer.text_features is not None else None
+        
             print(f"User features shape: {self.user_features.shape}")
             print(f"Book features shape: {self.book_features.shape}")
             if self.text_features is not None:
@@ -69,20 +70,17 @@ class TwoTowersPredictor:
 
         if len(user_indices) == 0 or len(book_indices) == 0:
             return np.array([])
-
-    # --- ДОБАВЬТЕ ЭТОТ БЛОК ---
-    # Отбираем только числовые столбцы
+    
         user_features_numeric = self.user_features.select_dtypes(include=[np.number])
         book_features_numeric = self.book_features.select_dtypes(include=[np.number])
     
-    # Проверка размерности
+
         if user_features_numeric.shape[1] == 0 or book_features_numeric.shape[1] == 0:
             raise ValueError("No numeric features found!")
     
         print(f"Using {user_features_numeric.shape[1]} user features and {book_features_numeric.shape[1]} book features")
-    # --- КОНЕЦ БЛОКА ---
+   
 
-    # Преобразуем данные в float (используем только числовые)
         user_features_tensor = torch.FloatTensor(user_features_numeric.values[user_indices].astype(np.float32))
         book_features_tensor = torch.FloatTensor(book_features_numeric.values[book_indices].astype(np.float32))
 
@@ -90,7 +88,6 @@ class TwoTowersPredictor:
             text_features_tensor = torch.FloatTensor(self.text_features.values[book_indices].astype(np.float32))
             book_features_tensor = torch.cat([book_features_tensor, text_features_tensor], dim=1)
 
-    # Предсказание
         with torch.no_grad():
             user_features_tensor = user_features_tensor.to(self.device)
             book_features_tensor = book_features_tensor.to(self.device)
@@ -99,6 +96,17 @@ class TwoTowersPredictor:
             probs = torch.softmax(logits, dim=1).cpu().numpy()
 
         return probs
+    def _convert_features_to_numeric(self, df):
+        """Преобразует все столбцы DataFrame в числовые"""
+        if df is None:
+            return None
+    
+        df = df.copy()
+        for col in df.columns:
+            if df[col].dtype == 'object' or df[col].dtype == 'string':
+            # Для строковых значений используем хэш
+                df[col] = df[col].astype(str).apply(lambda x: hash(x) % 10000)
+        return df
     
     def rank_candidates(self, user_id, candidate_books, k=20):
         if len(candidate_books) == 0:

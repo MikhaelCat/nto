@@ -21,7 +21,6 @@ def calculate_ndcg_at_k(submission_df: pd.DataFrame, solution_df: pd.DataFrame, 
         if len(user_solution) == 0:
             continue
         
-        # Parse ground truth
         read_books = set()
         planned_books = set()
         
@@ -31,39 +30,33 @@ def calculate_ndcg_at_k(submission_df: pd.DataFrame, solution_df: pd.DataFrame, 
         if not pd.isna(user_solution.iloc[0]['book_id_list_planned']):
             planned_books = set(int(b) for b in str(user_solution.iloc[0]['book_id_list_planned']).split(',') if b.strip())
         
-        # Parse predicted books
         if pd.isna(pred_books_str) or pred_books_str == '':
             pred_books = []
         else:
             pred_books = [int(b) for b in str(pred_books_str).split(',') if b.strip()]
         
-        # Calculate relevance scores for predicted books
         relevance_scores = []
-        for book_id in pred_books[:k]:  # Only consider top-k
+        for book_id in pred_books[:k]:  
             if book_id in read_books:
-                relevance_scores.append(2.0)  # Read
+                relevance_scores.append(2.0)  
             elif book_id in planned_books:
-                relevance_scores.append(1.0)  # Planned
+                relevance_scores.append(1.0)  
             else:
-                relevance_scores.append(0.0)  # Cold candidate
+                relevance_scores.append(0.0)  
         
-        # Calculate DCG
         dcg = 0.0
         for i, rel in enumerate(relevance_scores, 1):
             dcg += rel / np.log2(i + 1)
         
-        # Calculate ideal DCG
-        # Ideal order: all reads first, then planned, then cold
         ideal_relevance = []
         ideal_relevance.extend([2.0] * len(read_books))
         ideal_relevance.extend([1.0] * len(planned_books))
-        ideal_relevance = ideal_relevance[:k]  # Take top-k
+        ideal_relevance = ideal_relevance[:k]
         
         idcg = 0.0
         for i, rel in enumerate(ideal_relevance, 1):
             idcg += rel / np.log2(i + 1)
         
-        # Calculate NDCG
         if idcg > 0:
             ndcg = dcg / idcg
         else:
@@ -71,7 +64,6 @@ def calculate_ndcg_at_k(submission_df: pd.DataFrame, solution_df: pd.DataFrame, 
         
         ndcg_scores.append(ndcg)
     
-    # Calculate average NDCG
     if ndcg_scores:
         avg_ndcg = np.mean(ndcg_scores)
         print(f"Average NDCG@{k}: {avg_ndcg:.6f}")
@@ -83,38 +75,26 @@ def calculate_ndcg_at_k(submission_df: pd.DataFrame, solution_df: pd.DataFrame, 
 
 
 def evaluate_submission(submission_path: Path = None, solution_path: Path = None):
-    """
-    Evaluate a submission file against a solution file.
-    
-    Args:
-        submission_path: Path to submission CSV
-        solution_path: Path to solution CSV
-    """
     if submission_path is None:
         submission_path = Config.SUBMISSION_DIR / "submission_two_towers.csv"
     
     if solution_path is None:
-        # For local validation, you might have a validation solution
         solution_path = Config.PROCESSED_DATA_DIR / "validation_solution.csv"
     
     print("=" * 60)
     print("EVALUATING SUBMISSION")
     print("=" * 60)
     
-    # Load submission
     if not submission_path.exists():
         raise FileNotFoundError(f"Submission file not found: {submission_path}")
     
     submission_df = pd.read_csv(submission_path)
     print(f"Submission shape: {submission_df.shape}")
     
-    # Load solution
     if not solution_path.exists():
         print(f"Warning: Solution file not found at {solution_path}")
         print("Creating dummy solution for testing...")
         
-        # Create a dummy solution for testing
-        # In practice, you should have a real solution file
         solution_df = pd.DataFrame({
             constants.COL_USER_ID: submission_df[constants.COL_USER_ID].unique(),
             'book_id_list_read': '',
@@ -125,19 +105,14 @@ def evaluate_submission(submission_path: Path = None, solution_path: Path = None
         solution_df = pd.read_csv(solution_path)
         print(f"Solution shape: {solution_df.shape}")
     
-    # Calculate metrics
     ndcg20 = calculate_ndcg_at_k(submission_df, solution_df, k=20)
-    
-    # Additional metrics
     print("\nAdditional Metrics:")
     
-    # Average list length
     avg_length = submission_df[constants.COL_BOOK_ID_LIST].apply(
         lambda x: len(str(x).split(',')) if pd.notna(x) and x != '' else 0
     ).mean()
     print(f"Average recommendation length: {avg_length:.2f}")
     
-    # Coverage of users
     users_with_recs = submission_df[
         submission_df[constants.COL_BOOK_ID_LIST].notna() & 
         (submission_df[constants.COL_BOOK_ID_LIST] != '')
@@ -145,7 +120,6 @@ def evaluate_submission(submission_path: Path = None, solution_path: Path = None
     coverage = users_with_recs / len(submission_df) * 100
     print(f"User coverage: {coverage:.2f}% ({users_with_recs}/{len(submission_df)})")
     
-    # Unique books recommended
     all_books = []
     for book_list in submission_df[constants.COL_BOOK_ID_LIST]:
         if pd.notna(book_list) and book_list != '':
