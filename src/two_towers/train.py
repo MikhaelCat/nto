@@ -173,7 +173,7 @@ def train():
         mode='max', 
         factor=0.5, 
         patience=3, 
-        verbose=True
+       # verbose=True
     )
     
     # Ранняя остановка
@@ -218,7 +218,7 @@ def train():
             best_ndcg = val_ndcg
             patience_counter = 0
             
-            # Сохраняем модель
+            # Сохраняем   
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -227,8 +227,7 @@ def train():
                 'history': history,
                 'config': {
                     'user_input_dim': TWO_TOWER_PARAMS.user_input_dim,
-                    'book_input_dim': TWO_TOWER_PARAMS.book_input_dim,
-                    'params': TWO_TOWER_PARAMS.__dict__
+                    'book_input_dim': TWO_TOWER_PARAMS.book_input_dim
                 }
             }, Config.MODEL_DIR / Config.MODEL_FILENAME)
             

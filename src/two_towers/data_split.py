@@ -33,7 +33,7 @@ class BookRankingDataset(Dataset):
         self.pairs = pd.DataFrame(valid_pairs)
         
         self.user_features_tensor = torch.FloatTensor(user_features.values)
-        self.book_features_tensor = torch.FloatTensor(book_features.values)
+        self.book_features_tensor = torch.FloatTensor(book_features.apply(pd.to_numeric, errors='coerce').fillna(0).values)
         
         if text_features is not None:
             self.text_features_tensor = torch.FloatTensor(text_features.values)
