@@ -15,3 +15,5 @@ python -m src.two_towers.prepare_data
 python -m src.two_towers.train
 ## 3. Предсказание
 python -m src.two_towers.predict
+
+Qwen использовался для отладки кода и подбора параметров/гиперпараметров и конфигов.
