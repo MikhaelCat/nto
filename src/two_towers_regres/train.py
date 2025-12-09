@@ -28,7 +28,6 @@ def calculate_ndcg(predictions: torch.Tensor, labels: torch.Tensor, k: int = 20)
         gain = 2.0 ** float(rel) - 1.0
         dcg += gain / np.log2(i + 1)
     
-    # Рассчитываем идеальный DCG (IDCG)
     sorted_true = torch.sort(labels, descending=True)[0][:k]
     idcg = 0.0
     for i, rel in enumerate(sorted_true, 1):
@@ -39,23 +38,24 @@ def calculate_ndcg(predictions: torch.Tensor, labels: torch.Tensor, k: int = 20)
 
 
 def train_epoch(model, train_loader, criterion, optimizer, device, epoch):
-    """Обучение на одной эпохе для регрессии"""
+    """Обучение на одной эпохе"""
     model.train()
     total_loss = 0
-    total_mae = 0
+    total_ndcg = 0
     total_samples = 0
     
+    pbar = tqdm(train_loader, desc=f'Epoch {epoch+1} [Train]')
+    
     for batch_idx, (user_feat, book_feat, labels) in enumerate(pbar):
+        # Перемещаем на устройство
         user_feat = user_feat.to(device)
         book_feat = book_feat.to(device)
-        labels = labels.to(device).float()  # Преобразуем во float для регрессии
+        labels = labels.to(device)
         
         # Forward pass
         optimizer.zero_grad()
-        predictions = model(user_feat, book_feat)
-        
-        # Регрессионная loss
-        loss = criterion(predictions.squeeze(), labels)
+        logits = model(user_feat, book_feat)
+        loss = criterion(logits, labels)
         
         # Backward pass
         loss.backward()
@@ -65,10 +65,24 @@ def train_epoch(model, train_loader, criterion, optimizer, device, epoch):
         # Метрики
         batch_size = labels.size(0)
         total_loss += loss.item() * batch_size
-        total_mae += torch.abs(predictions.squeeze() - labels).sum().item()
         total_samples += batch_size
+        
+        # NDCG
+        with torch.no_grad():
+            probs = torch.softmax(logits, dim=1)
+            ndcg = calculate_ndcg(probs, labels, k=min(20, batch_size))
+            total_ndcg += ndcg * batch_size
+        
+        # Обновляем progress bar
+        avg_loss = total_loss / total_samples
+        avg_ndcg = total_ndcg / total_samples
+        pbar.set_postfix({
+            'loss': f'{avg_loss:.4f}',
+            'ndcg': f'{avg_ndcg:.4f}',
+            'lr': f'{optimizer.param_groups[0]["lr"]:.6f}'
+        })
     
-    return total_loss / total_samples, total_mae / total_samples
+    return total_loss / total_samples, total_ndcg / total_samples
 
 
 def validate_epoch(model, val_loader, criterion, device):
@@ -129,6 +143,7 @@ def train():
     print("=" * 60)
     
     # Устройство
+    print(torch.cuda.is_available())
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
@@ -241,32 +256,6 @@ def train():
     
     return model, history
 
-def calculate_ndcg_regression(predictions: torch.Tensor, labels: torch.Tensor, 
-                            has_read: torch.Tensor, k: int = 20) -> float:
-    weights = torch.where(has_read == 1, 2.0, 1.0)
-    
-    # Сортируем по предсказаниям
-    _, indices = torch.sort(predictions, descending=True)
-    sorted_weights = weights[indices][:k]
-    sorted_labels = labels[indices][:k]
-    
-    # DCG
-    dcg = 0.0
-    for i, (w, l) in enumerate(zip(sorted_weights, sorted_labels), 1):
-        gain = w if l == 1 else 0  # Только если книга была прочитана
-        dcg += gain / np.log2(i + 1)
-    
-    # IDCG (идеальная сортировка по has_read)
-    ideal_indices = torch.sort(has_read, descending=True)[1]
-    ideal_weights = weights[ideal_indices][:k]
-    ideal_labels = labels[ideal_indices][:k]
-    
-    idcg = 0.0
-    for i, (w, l) in enumerate(zip(ideal_weights, ideal_labels), 1):
-        gain = w if l == 1 else 0
-        idcg += gain / np.log2(i + 1)
-    
-    return dcg / idcg if idcg > 0 else 0.0
 
 if __name__ == "__main__":
     model, history = train()

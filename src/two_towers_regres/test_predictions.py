@@ -5,16 +5,11 @@ from src.two_towers.config import Config
 
 def test_predictions():
     print("Testing prediction pipeline...")
-    
-    # Запускаем предсказания
     submission_df = predict()
-    
-    # Проверяем результат
     print("\n" + "="*60)
     print("TEST RESULTS")
     print("="*60)
     
-    # Проверяем, что файл создан
     submission_path = Config.SUBMISSION_DIR / "submission_two_towers.csv"
     if submission_path.exists():
         print(f"✓ Submission file created: {submission_path}")
@@ -22,11 +17,9 @@ def test_predictions():
         print(f"✗ Submission file NOT created!")
         return
     
-    # Читаем файл
     df = pd.read_csv(submission_path)
     print(f"✓ File shape: {df.shape}")
     
-    # Проверяем колонки
     expected_columns = ['user_id', 'book_id_list']
     if all(col in df.columns for col in expected_columns):
         print(f"✓ All expected columns present")
@@ -34,14 +27,12 @@ def test_predictions():
         missing = [col for col in expected_columns if col not in df.columns]
         print(f"✗ Missing columns: {missing}")
     
-    # Проверяем, что book_id_list не пустой
     empty_lists = df['book_id_list'].isna().sum() + (df['book_id_list'] == '').sum()
     if empty_lists == 0:
         print(f"✓ All users have recommendations")
     else:
         print(f"✗ {empty_lists} users have empty recommendations")
-    
-    # Проверяем длину рекомендаций
+
     df['rec_length'] = df['book_id_list'].apply(lambda x: len(str(x).split(',')) if pd.notna(x) and x != '' else 0)
     avg_length = df['rec_length'].mean()
     
@@ -52,7 +43,6 @@ def test_predictions():
     else:
         print(f"✗ All recommendations are empty!")
     
-    # Выводим несколько примеров
     print("\nSample recommendations (first 5 users):")
     for i, row in df.head().iterrows():
         books = str(row['book_id_list']).split(',') if row['book_id_list'] else []

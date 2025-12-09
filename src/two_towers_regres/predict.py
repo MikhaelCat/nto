@@ -37,7 +37,7 @@ class TwoTowersPredictor:
             TWO_TOWER_PARAMS.book_input_dim
         ).to(self.device)
         
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         self.model.eval()
         
         print(f"Model loaded. Best NDCG: {checkpoint['best_ndcg']:.4f}")
@@ -92,6 +92,7 @@ class TwoTowersPredictor:
             return ratings.cpu().numpy().flatten()
 
         return probs
+    
     def _convert_features_to_numeric(self, df):
         """Преобразует все столбцы DataFrame в числовые"""
         if df is None:
@@ -113,7 +114,6 @@ class TwoTowersPredictor:
         
         return df
 
-    # В классе TwoTowersPredictor в predict.py
     def rank_candidates(self, user_id, candidate_books, k=20):
         """Ранжирование кандидатов по предсказанному рейтингу"""
         if len(candidate_books) == 0:
@@ -150,8 +150,6 @@ class TwoTowersPredictor:
         
         return reordered
 
-
-# В функции predict() в predict.py
 def predict():
     print("=" * 60)
     print("GENERATING PREDICTIONS WITH TWO-TOWERS MODEL")
@@ -209,10 +207,8 @@ def predict():
             })
             continue
         
-        # Разбираем список кандидатов
         candidate_list = user_candidates.iloc[0]['book_id_list']
-        
-        # Проверка: является ли candidate_list строкой
+
         if not isinstance(candidate_list, str) or pd.isna(candidate_list):
             print(f"Warning: Invalid candidate list for user {user_id}: {candidate_list}")
             submission_rows.append({
@@ -221,7 +217,6 @@ def predict():
             })
             continue
             
-        # Парсим список книг
         try:
             candidate_books = [int(bid.strip()) for bid in str(candidate_list).split(',') if bid.strip()]
         except Exception as e:
@@ -243,11 +238,9 @@ def predict():
             )
         except Exception as e:
             print(f"Error ranking candidates for user {user_id}: {e}")
-            # Возвращаем топ кандидатов по популярности как fallback
             ranked_books = candidate_books[:constants.MAX_RANKING_LENGTH]
         
         if len(ranked_books) > 0:
-            # Применяем иерархическое ограничение если нужно
             user_ids = [user_id] * len(ranked_books)
             try:
                 probs = predictor.predict_batch(user_ids, ranked_books)
@@ -263,22 +256,17 @@ def predict():
             constants.COL_BOOK_ID_LIST: book_id_list
         })
     
-    # Создаем submission DataFrame
     submission_df = pd.DataFrame(submission_rows)
     
-    # Проверяем на пустые строки
     empty_recommendations = submission_df[submission_df[constants.COL_BOOK_ID_LIST] == ""].shape[0]
     print(f"\nUsers with empty recommendations: {empty_recommendations}/{len(submission_df)}")
     
-    # Если слишком много пустых рекомендаций, добавляем fallback
-    if empty_recommendations > len(submission_df) * 0.5:  # Если более 50% пустых
+    if empty_recommendations > len(submission_df) * 0.5:  
         print("Warning: Too many empty recommendations! Using fallback strategy...")
         
-        # Получаем самые популярные книги из train.csv
         train_df = data['train']
         popular_books = train_df.groupby(constants.BOOK_ID).size().sort_values(ascending=False).head(20).index.tolist()
         
-        # Заполняем пустые рекомендации популярными книгами
         for i, row in submission_df.iterrows():
             if not row[constants.COL_BOOK_ID_LIST]:
                 fallback_books = popular_books[:constants.MAX_RANKING_LENGTH]

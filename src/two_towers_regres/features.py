@@ -29,14 +29,12 @@ except ImportError:
 
 import torch
 
-# Импорт локальных модулей - исправлены пути
 try:
     from .constants import (
         USER_ID, BOOK_ID, HAS_READ, RATING, TIMESTAMP,
         AUTHOR_ID, DESCRIPTION, READ_CLASS, PLANNED_CLASS, COLD_CLASS, COL_BOOK_ID_LIST
     )
 except ImportError:
-    # Определяем константы по умолчанию, если импорт не работает
     USER_ID = 'user_id'
     BOOK_ID = 'book_id'
     HAS_READ = 'has_read'
@@ -48,7 +46,6 @@ except ImportError:
     PLANNED_CLASS = 1
     COLD_CLASS = 0
 
-# Конфигурация - используем локальный импорт
 try:
     from .config import Config
 except ImportError:
@@ -89,11 +86,9 @@ class TwoTowersFeatureEngineer:
         features_path = self.config.paths['features']
         text_features_path = self.config.paths['text_features']
         
-        # Create output directories if they don't exist
         features_path.parent.mkdir(parents=True, exist_ok=True)
         text_features_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Save main features
         features = {
             'user_features': self.user_features,
             'book_features': self.book_features
@@ -101,24 +96,20 @@ class TwoTowersFeatureEngineer:
         joblib.dump(features, features_path)
         print(f"Saved features to {features_path}")
         
-        # Save text features
         if self.text_features is not None:
             self.text_features.to_pickle(text_features_path)
             print(f"Saved text features to {text_features_path}")
     
     def _preprocess_text(self, text: str) -> str:
-        """Basic text preprocessing for TF-IDF."""
         if not isinstance(text, str) or pd.isna(text) or text.strip() == '':
             return ''
         
-        # Lowercase, remove special characters and extra spaces
         text = text.lower()
         text = re.sub(r'[^\w\s]', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
         return text
     
     def _get_bert_embeddings(self, descriptions: List[str], batch_size: int = 32) -> np.ndarray:
-        """Generate BERT embeddings for book descriptions."""
         if self.bert_tokenizer is None or self.bert_model is None:
             print("Loading BERT model...")
             model_name = "DeepPavlov/rubert-base-cased"
@@ -132,7 +123,6 @@ class TwoTowersFeatureEngineer:
         for i in tqdm(range(0, len(descriptions), batch_size), desc="Generating BERT embeddings"):
             batch = descriptions[i:i + batch_size]
             
-            # Tokenize batch
             inputs = self.bert_tokenizer(
                 batch,
                 padding=True,
@@ -141,13 +131,10 @@ class TwoTowersFeatureEngineer:
                 return_tensors="pt"
             )
             
-            # Move to device
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
-            # Get embeddings
             with torch.no_grad():
                 outputs = self.bert_model(**inputs)
-                # Use [CLS] token embedding
                 embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
             
             all_embeddings.append(embeddings)
@@ -155,29 +142,16 @@ class TwoTowersFeatureEngineer:
         return np.vstack(all_embeddings)
     
     def create_user_features(self, train_df: pd.DataFrame, users_df: pd.DataFrame) -> pd.DataFrame:
-        """Create comprehensive user features for the user tower."""
         print("Creating user features...")
 
         user_features = users_df.set_index(USER_ID).copy()
-        
-        # Temporal features from interactions
         user_temporal = self._create_user_temporal_features(train_df)
-        
-        # Reading behavior features
         user_behavior = self._create_user_behavior_features(train_df)
-        
-        # Genre preference features
         user_genres = self._create_user_genre_preferences(train_df)
-        
-        # Merge all user features
         user_features = user_features.join(user_temporal, how='left')
         user_features = user_features.join(user_behavior, how='left')
         user_features = user_features.join(user_genres, how='left')
-        
-        # Fill missing values
         user_features.fillna(0, inplace=True)
-        
-        # Normalize numerical features
         numerical_cols = user_features.select_dtypes(include=[np.number]).columns.tolist()
         for col in numerical_cols:
             if user_features[col].std() > 0:
@@ -187,36 +161,25 @@ class TwoTowersFeatureEngineer:
         return user_features
     
     def _create_user_temporal_features(self, train_df: pd.DataFrame) -> pd.DataFrame:
-        """Create temporal features for users."""
-        # Ensure timestamp is datetime
         if TIMESTAMP in train_df.columns:
             train_df[TIMESTAMP] = pd.to_datetime(train_df[TIMESTAMP])
             
-            # Last interaction timestamp
             last_interaction = train_df.groupby(USER_ID)[TIMESTAMP].max()
             
-            # Days since last interaction
             current_time = train_df[TIMESTAMP].max()
             days_since_last = (current_time - last_interaction).dt.days
-            
-            # Activity frequency
             interaction_count = train_df.groupby(USER_ID).size()
             first_interaction = train_df.groupby(USER_ID)[TIMESTAMP].min()
             days_active = (last_interaction - first_interaction).dt.days
-            
-            # Handle division by zero
             days_active = days_active.replace(0, 1)
             activity_frequency = interaction_count / days_active
             
-            # Time of day preferences
             train_df['hour'] = train_df[TIMESTAMP].dt.hour
             user_hour_stats = train_df.groupby(USER_ID)['hour'].agg(['mean', 'std']).fillna(0)
             
-            # Weekend activity ratio
             train_df['is_weekend'] = train_df[TIMESTAMP].dt.dayofweek.isin([5, 6]).astype(int)
             weekend_ratio = train_df.groupby(USER_ID)['is_weekend'].mean()
             
-            # Create features DataFrame
             temporal_features = pd.DataFrame({
                 'days_since_last_interaction': days_since_last,
                 'activity_frequency': activity_frequency,

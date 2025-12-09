@@ -13,8 +13,6 @@ from . import constants
 
 
 class BookRankingDataset(Dataset):
-    """Датасет для обучения Two-Towers модели"""
-    
     def __init__(self, user_features: pd.DataFrame, book_features: pd.DataFrame, 
                  pairs: pd.DataFrame, text_features: pd.DataFrame = None):
         self.user_features = user_features
@@ -200,16 +198,11 @@ def prepare_data_for_regression(train_df: pd.DataFrame, books_df: pd.DataFrame):
 
     positive_samples = train_df[train_df['has_read'] == 1].copy()
     planned_samples = train_df[train_df['has_read'] == 0].copy()
-    
-    # Для прочитанных: нормализуем рейтинг
     if 'rating' in positive_samples.columns:
         positive_samples['target'] = positive_samples['rating'] / 5.0  # 0-2
     else:
-        positive_samples['target'] = 1.5  # Среднее значение
+        positive_samples['target'] = 1.5  
     
-    # Для запланированных: 0.5
     planned_samples['target'] = 0.5
-    
-    # Холодные кандидаты: 0.0 (будут добавлены позже)
     
     return positive_samples, planned_samples

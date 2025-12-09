@@ -49,7 +49,7 @@ class TWO_TOWER_PARAMS:
     
     # Обучение
     learning_rate = 0.001
-    batch_size = 256
+    batch_size = 1024
     num_epochs = 20
     dropout_rate = 0.3
 
