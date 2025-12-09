@@ -11,7 +11,6 @@ from .config import Config, TWO_TOWER_PARAMS
 from . import constants
 from .data_processing import load_and_merge_data, expand_candidates
 
-
 class TwoTowersPredictor:
     def __init__(self, model_path=None):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -102,12 +101,21 @@ class TwoTowersPredictor:
             return None
     
         df = df.copy()
+
         for col in df.columns:
             if df[col].dtype == 'object' or df[col].dtype == 'string':
-            # Для строковых значений используем хэш
-                df[col] = df[col].astype(str).apply(lambda x: hash(x) % 10000)
+                # Для строковых значений используем хэш
+                df[col] = df[col].astype(str).apply(lambda x: hash(str(x)) % 10000)
+            elif df[col].dtype.name == 'category':
+                # Для категориальных значений используем коды
+                 df[col] = df[col].cat.codes
+        
+            elif df[col].dtype == bool:
+                # Булевы значения в 0/1
+                df[col] = df[col].astype(int)
+        
         return df
-    
+
     def rank_candidates(self, user_id, candidate_books, k=20):
         if len(candidate_books) == 0:
             return []
