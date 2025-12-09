@@ -116,24 +116,34 @@ class TwoTowersPredictor:
         
         return df
 
+    # В классе TwoTowersPredictor в predict.py
     def rank_candidates(self, user_id, candidate_books, k=20):
         if len(candidate_books) == 0:
             return []
+    
+        try:
+            # Предсказание вероятностей
+            user_ids = [user_id] * len(candidate_books)
+            probs = self.predict_batch(user_ids, candidate_books)
         
-        # Предсказание вероятностей
-        user_ids = [user_id] * len(candidate_books)
-        probs = self.predict_batch(user_ids, candidate_books)
+            if len(probs) == 0:
+                print(f"Warning: No probabilities returned for user {user_id}")
+                # Возвращаем первые k кандидатов как fallback
+                return candidate_books[:k]
         
-        if len(probs) == 0:
-            return candidate_books[:k]
+        # Считаем взвешенный score (читаем = 2, в планах = 1, холодный = 0)
+            scores = probs[:, 1] * 1.0 + probs[:, 2] * 2.0
         
-        scores = probs[:, 1] * 1.0 + probs[:, 2] * 2.0
+            # Сортируем по убыванию score
+            sorted_indices = np.argsort(scores)[::-1]
+            ranked_books = [candidate_books[i] for i in sorted_indices]
         
-        # по убыванию скора
-        sorted_indices = np.argsort(scores)[::-1]
-        ranked_books = [candidate_books[i] for i in sorted_indices]
+            return ranked_books[:k]
         
-        return ranked_books[:k]
+        except Exception as e:
+            print(f"Error in rank_candidates for user {user_id}: {e}")
+        # Fallback: возвращаем первые k кандидатов
+        return candidate_books[:k]
     
     def apply_hierarchical_constraint(self, ranked_books, probs):
         if len(ranked_books) == 0:
@@ -155,6 +165,7 @@ class TwoTowersPredictor:
         return reordered
 
 
+# В функции predict() в predict.py
 def predict():
     print("=" * 60)
     print("GENERATING PREDICTIONS WITH TWO-TOWERS MODEL")
@@ -187,6 +198,10 @@ def predict():
     print(f"Targets: {len(targets_df):,} users")
     print(f"Candidates: {len(candidates_df):,} users")
     
+    # Проверка: есть ли кандидаты для всех пользователей
+    users_with_candidates = targets_df[constants.COL_USER_ID].isin(candidates_df[constants.COL_USER_ID])
+    print(f"Users with candidates: {users_with_candidates.sum()}/{len(targets_df)}")
+    
     # Подготовка признаков
     print("\nPreparing features...")
     predictor.prepare_features(data)
@@ -201,6 +216,7 @@ def predict():
         ]
         
         if len(user_candidates) == 0:
+            print(f"Warning: No candidates for user {user_id}")
             submission_rows.append({
                 constants.COL_USER_ID: user_id,
                 constants.COL_BOOK_ID_LIST: ""
@@ -209,20 +225,53 @@ def predict():
         
         # Разбираем список кандидатов
         candidate_list = user_candidates.iloc[0]['book_id_list']
-        candidate_books = [int(bid) for bid in str(candidate_list).split(',') if bid.strip()]
+        
+        # Проверка: является ли candidate_list строкой
+        if not isinstance(candidate_list, str) or pd.isna(candidate_list):
+            print(f"Warning: Invalid candidate list for user {user_id}: {candidate_list}")
+            submission_rows.append({
+                constants.COL_USER_ID: user_id,
+                constants.COL_BOOK_ID_LIST: ""
+            })
+            continue
+            
+        # Парсим список книг
+        try:
+            candidate_books = [int(bid.strip()) for bid in str(candidate_list).split(',') if bid.strip()]
+        except Exception as e:
+            print(f"Error parsing candidate list for user {user_id}: {e}")
+            candidate_books = []
+        
+        if len(candidate_books) == 0:
+            print(f"Warning: Empty candidate books for user {user_id}")
+            submission_rows.append({
+                constants.COL_USER_ID: user_id,
+                constants.COL_BOOK_ID_LIST: ""
+            })
+            continue
         
         # Ранжируем кандидатов
-        ranked_books = predictor.rank_candidates(
-            user_id, candidate_books, constants.MAX_RANKING_LENGTH
-        )
+        try:
+            ranked_books = predictor.rank_candidates(
+                user_id, candidate_books, constants.MAX_RANKING_LENGTH
+            )
+        except Exception as e:
+            print(f"Error ranking candidates for user {user_id}: {e}")
+            # Возвращаем топ кандидатов по популярности как fallback
+            ranked_books = candidate_books[:constants.MAX_RANKING_LENGTH]
         
         if len(ranked_books) > 0:
+            # Применяем иерархическое ограничение если нужно
             user_ids = [user_id] * len(ranked_books)
-            probs = predictor.predict_batch(user_ids, ranked_books)
-            if len(probs) > 0:
-                ranked_books = predictor.apply_hierarchical_constraint(ranked_books, probs)
+            try:
+                probs = predictor.predict_batch(user_ids, ranked_books)
+                if len(probs) > 0:
+                    ranked_books = predictor.apply_hierarchical_constraint(ranked_books, probs)
+            except Exception as e:
+                print(f"Warning: Could not apply hierarchical constraint for user {user_id}: {e}")
         
-        book_id_list = ",".join(str(book_id) for book_id in ranked_books)
+        # Формируем строку с книгами
+        book_id_list = ",".join(str(book_id) for book_id in ranked_books[:constants.MAX_RANKING_LENGTH])
         submission_rows.append({
             constants.COL_USER_ID: user_id,
             constants.COL_BOOK_ID_LIST: book_id_list
@@ -231,28 +280,49 @@ def predict():
     # Создаем submission DataFrame
     submission_df = pd.DataFrame(submission_rows)
     
+    # Проверяем на пустые строки
+    empty_recommendations = submission_df[submission_df[constants.COL_BOOK_ID_LIST] == ""].shape[0]
+    print(f"\nUsers with empty recommendations: {empty_recommendations}/{len(submission_df)}")
+    
+    # Если слишком много пустых рекомендаций, добавляем fallback
+    if empty_recommendations > len(submission_df) * 0.5:  # Если более 50% пустых
+        print("Warning: Too many empty recommendations! Using fallback strategy...")
+        
+        # Получаем самые популярные книги из train.csv
+        train_df = data['train']
+        popular_books = train_df.groupby(constants.BOOK_ID).size().sort_values(ascending=False).head(20).index.tolist()
+        
+        # Заполняем пустые рекомендации популярными книгами
+        for i, row in submission_df.iterrows():
+            if not row[constants.COL_BOOK_ID_LIST]:
+                fallback_books = popular_books[:constants.MAX_RANKING_LENGTH]
+                submission_df.at[i, constants.COL_BOOK_ID_LIST] = ",".join(str(b) for b in fallback_books)
+    
     # Сохраняем
     Config.SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
     submission_path = Config.SUBMISSION_DIR / "submission_two_towers.csv"
     submission_df.to_csv(submission_path, index=False)
     
+    # Статистика
     print(f"\n{'='*60}")
     print("PREDICTIONS COMPLETE")
     print(f"Submission saved to: {submission_path}")
     print(f"Submission shape: {submission_df.shape}")
     
-    # Статистика
-    non_empty = submission_df[submission_df[constants.COL_BOOK_ID_LIST] != ""].shape[0]
-    avg_books = submission_df[constants.COL_BOOK_ID_LIST].apply(
-        lambda x: len(x.split(',')) if x else 0
-    ).mean()
+    # Подсчет статистики
+    recommendations_lengths = submission_df[constants.COL_BOOK_ID_LIST].apply(
+        lambda x: len(str(x).split(',')) if x else 0
+    )
     
-    print(f"Users with recommendations: {non_empty}/{len(submission_df)}")
-    print(f"Average books per user: {avg_books:.1f}")
+    print(f"\nRecommendations statistics:")
+    print(f"Users with recommendations: {submission_df[constants.COL_BOOK_ID_LIST].notna().sum()}/{len(submission_df)}")
+    print(f"Average books per user: {recommendations_lengths.mean():.1f}")
+    print(f"Min books: {recommendations_lengths.min()}")
+    print(f"Max books: {recommendations_lengths.max()}")
+    print(f"Empty recommendations: {empty_recommendations}")
     print(f"{'='*60}")
     
     return submission_df
-
 
 if __name__ == "__main__":
     submission = predict()

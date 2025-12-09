@@ -33,7 +33,7 @@ import torch
 try:
     from .constants import (
         USER_ID, BOOK_ID, HAS_READ, RATING, TIMESTAMP,
-        AUTHOR_ID, DESCRIPTION, READ_CLASS, PLANNED_CLASS, COLD_CLASS
+        AUTHOR_ID, DESCRIPTION, READ_CLASS, PLANNED_CLASS, COLD_CLASS, COL_BOOK_ID_LIST
     )
 except ImportError:
     # Определяем константы по умолчанию, если импорт не работает
@@ -649,30 +649,63 @@ class TwoTowersFeatureEngineer:
         
         return features_df
     
+    # В методе create_all_features в features.py
     def create_all_features(self, data: Dict[str, pd.DataFrame]) -> None:
-        """Create all features for the two towers architecture."""
         print("=" * 80)
         print("STARTING FEATURE ENGINEERING FOR TWO TOWERS ARCHITECTURE")
         print("=" * 80)
-        
+    
         train_df = data['train']
         books_df = data['books']
         users_df = data['users']
         book_descriptions_df = data.get('book_descriptions', pd.DataFrame())
-        
-        # Create user features
+    
+    # Проверка данных
+        print(f"Train data: {len(train_df)} interactions")
+        print(f"Unique users in train: {train_df[USER_ID].nunique()}")
+        print(f"Unique books in train: {train_df[BOOK_ID].nunique()}")
+        print(f"Books data: {len(books_df)} books")
+        print(f"Users data: {len(users_df)} users")
+    
+        # Создаем признаки пользователей
         self.user_features = self.create_user_features(train_df, users_df)
-        
-        # Create book features
+    
+    # Проверяем, что все пользователи из targets имеют признаки
+        if 'targets' in data:
+            targets_users = set(data['targets'][USER_ID].unique())
+            feature_users = set(self.user_features.index)
+            missing_users = targets_users - feature_users
+            if missing_users:
+                print(f"Warning: {len(missing_users)} users from targets don't have features")
+    
+    # Создаем признаки книг
         self.book_features = self.create_book_features(train_df, books_df)
+    
+    # Проверяем, что все книги из candidates имеют признаки
+        if 'candidates' in data:
+            candidates_df = data['candidates']
+        # Разбираем все книги из кандидатов
+            all_candidate_books = set()
+            for book_list in candidates_df[COL_BOOK_ID_LIST]:
+                if pd.notna(book_list):
+                    all_candidate_books.update([int(b.strip()) for b in str(book_list).split(',') if b.strip()])
         
-        # Create text features if available
+            feature_books = set(self.book_features.index)
+            missing_books = all_candidate_books - feature_books
+            if missing_books:
+                print(f"Warning: {len(missing_books)} books from candidates don't have features")
+            # Создаем фиктивные признаки для отсутствующих книг
+                for book_id in missing_books:
+                    if book_id not in self.book_features.index:
+                        self.book_features.loc[book_id] = 0
+    
+    # Создаем текстовые признаки если доступны
         if not book_descriptions_df.empty:
             self.text_features = self.create_text_features(books_df, book_descriptions_df)
-        
+    
         if self.config.cache_features:
             self.save_features()
-        
+    
         print("=" * 80)
         print("FEATURE ENGINEERING COMPLETE")
         print(f"User features shape: {self.user_features.shape}")
